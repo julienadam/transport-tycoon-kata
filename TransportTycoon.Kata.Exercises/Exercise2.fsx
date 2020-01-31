@@ -126,38 +126,35 @@ let FactoryToWarehouseBTransitTime = 5
 let WarehouseBToFactoryTransitTime = FactoryToWarehouseBTransitTime 
 
 
-let driveOneHour (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (truckState: TruckState) (truckId: VehicleId )=
+let driveOneHour (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (truckState: TruckState) (truckId: VehicleId ) =
     match truckState, factoryOutboundQueue with
-    | state, factoryQueue when state.Cargo.IsNone ->
-        match state.HoursLeftToDestination, factoryQueue with 
-        | 0, [] -> factoryOutboundQueue, portOutboundQueue, truckState
-        | 0, cargoToPickup::restOfFactoryQueue -> 
-            match cargoToPickup.Destination with 
-            | Warehouse.A ->
-                restOfFactoryQueue, portOutboundQueue |> List.append [ cargoToPickup ], { state with Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = PortToFactoryTransitTime }
-            | Warehouse.B -> 
-                restOfFactoryQueue, portOutboundQueue, { state with Cargo = Some cargoToPickup; Destination = TruckDestination.WarehouseB; HoursLeftToDestination = FactoryToWarehouseBTransitTime - 1 }
-        | 1, _ -> 
-            match factoryQueue with 
-            | [] -> factoryOutboundQueue, portOutboundQueue, { state with HoursLeftToDestination = 0; Cargo = None; Destination = TruckDestination.Idle }
-            | cargoToPickup :: restOfFactoryQueue -> 
-                let newDestination, transitTime = match cargoToPickup.Destination with | Warehouse.A -> TruckDestination.Port, FactoryToPortTransitTime | Warehouse.B -> TruckDestination.WarehouseB, FactoryToWarehouseBTransitTime
-                restOfFactoryQueue, portOutboundQueue, { state with Cargo = Some cargoToPickup; Destination = newDestination; HoursLeftToDestination = transitTime }
-        | hoursLeftToDestination, _ -> factoryOutboundQueue, portOutboundQueue, { state with HoursLeftToDestination = hoursLeftToDestination - 1 }
-    | state, factoryQueue when state.Cargo.IsSome ->
-        match state.Destination, state.HoursLeftToDestination with
-        | _, hoursLeftToDestination when hoursLeftToDestination > 1 -> factoryOutboundQueue, portOutboundQueue, { state with HoursLeftToDestination = hoursLeftToDestination - 1 }
-        | _, 0 -> factoryOutboundQueue, portOutboundQueue, truckState
-        | currentDestination, 1 ->
-            match currentDestination with   
-            | Factory -> 
-                failwith "Not possible"
-            | TruckDestination.Port ->
-                factoryQueue, List.concat [portOutboundQueue; [ state.Cargo.Value ]] , { state with Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = PortToFactoryTransitTime }
-            | TruckDestination.WarehouseB ->
-                factoryQueue, portOutboundQueue, { state with Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = WarehouseBToFactoryTransitTime }
-            | TruckDestination.Idle ->
-                factoryOutboundQueue, portOutboundQueue, truckState
+    | { Cargo = None; HoursLeftToDestination = 0 }, [] ->
+        factoryOutboundQueue, portOutboundQueue, truckState
+    | { Cargo = None; HoursLeftToDestination = 0 }, cargoToPickup::restOfFactoryQueue ->
+        match cargoToPickup.Destination with
+        | A ->
+            restOfFactoryQueue, portOutboundQueue |> List.append [ cargoToPickup ], { truckState with Cargo = None; Destination = Factory; HoursLeftToDestination = PortToFactoryTransitTime }
+        | B ->
+            restOfFactoryQueue, portOutboundQueue, { truckState with Cargo = Some cargoToPickup; Destination = WarehouseB; HoursLeftToDestination = FactoryToWarehouseBTransitTime - 1 }
+    | { Cargo = None; HoursLeftToDestination = 1 }, [] ->
+        factoryOutboundQueue, portOutboundQueue, { truckState with HoursLeftToDestination = 0; Cargo = None; Destination = TruckDestination.Idle }
+    | { Cargo = None; HoursLeftToDestination = 1 }, cargoToPickup :: restOfFactoryQueue ->
+        let newDestination, transitTime = match cargoToPickup.Destination with | A -> TruckDestination.Port, FactoryToPortTransitTime | B -> WarehouseB, FactoryToWarehouseBTransitTime
+        restOfFactoryQueue, portOutboundQueue, { truckState with Cargo = Some cargoToPickup; Destination = newDestination; HoursLeftToDestination = transitTime }
+    | { Cargo = None }, _ ->
+        factoryOutboundQueue, portOutboundQueue, { truckState with HoursLeftToDestination = truckState.HoursLeftToDestination - 1 }
+    | { Cargo = Some _; HoursLeftToDestination = 0 }, _ ->
+        factoryOutboundQueue, portOutboundQueue, truckState
+    | { Cargo = Some _; HoursLeftToDestination = 1; Destination = Factory }, _ ->
+        failwith "Not possible"
+    | { Cargo = Some cargo; HoursLeftToDestination = 1; Destination = TruckDestination.Port }, _ ->
+        factoryOutboundQueue, List.concat [portOutboundQueue; [ cargo ]] , { truckState with Cargo = None; Destination = Factory; HoursLeftToDestination = PortToFactoryTransitTime }
+    | { Cargo = Some _; HoursLeftToDestination = 1; Destination = WarehouseB }, _ ->
+        factoryOutboundQueue, portOutboundQueue, { truckState with Cargo = None; Destination = Factory; HoursLeftToDestination = WarehouseBToFactoryTransitTime }
+    | { Cargo = Some _; HoursLeftToDestination = 1; Destination = TruckDestination.Idle }, _ ->
+        factoryOutboundQueue, portOutboundQueue, truckState
+    | { Cargo = Some _ } , _ ->
+        factoryOutboundQueue, portOutboundQueue, { truckState with HoursLeftToDestination = truckState.HoursLeftToDestination - 1 }
 
 
 open Expecto
@@ -345,15 +342,15 @@ let deliveryTests =
             Expect.equal hoursElapsed 7 "Hours elapsed did not match expected time span"
         }
     ]
-    
+
 runTests defaultConfig deliveryTests
 
 let createCargoListFromInput (input: string) =
-    input 
-    |> Seq.mapi (fun index character -> 
-        match character with 
-        | 'A' -> { Id = index; Destination = Warehouse.A } 
-        | 'B' -> { Id = index; Destination = Warehouse.B } 
+    input
+    |> Seq.mapi (fun index character ->
+        match character with
+        | 'A' -> { Id = index; Destination = Warehouse.A }
+        | 'B' -> { Id = index; Destination = Warehouse.B }
         | invalid -> failwithf "Invalid character %c" invalid)
     |> Seq.toList
 
