@@ -110,10 +110,15 @@ type ShipState =
         Cargo : Cargo option
     }
 
+type VehicleId = int
+
 type VehicleState =
 | TruckState of TruckState
 | ShipState of ShipState
 
+type Vehicle = 
+    | Truck of VehicleId * TruckState
+    | Ship of VehicleId * ShipState
 
 let FactoryToPortTransitTime = 1
 let PortToFactoryTransitTime = FactoryToPortTransitTime
@@ -121,7 +126,7 @@ let FactoryToWarehouseBTransitTime = 5
 let WarehouseBToFactoryTransitTime = FactoryToWarehouseBTransitTime 
 
 
-let driveOneHour (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (truckState : TruckState) =
+let driveOneHour (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (truckState: TruckState) (truckId: VehicleId )=
     match truckState, factoryOutboundQueue with
     | state, factoryQueue when state.Cargo.IsNone ->
         match state.HoursLeftToDestination, factoryQueue with 
@@ -161,62 +166,61 @@ let testCargoA = { Id = 1; Destination = Warehouse.A }
 let testCargoA' = { Id = 2; Destination = Warehouse.A }
 let testCargoB = { Id = 100; Destination = Warehouse.B }
 let testCargoB' = { Id = 101; Destination = Warehouse.B }
-let testCargoB'' = { Id = 102; Destination = Warehouse.B }
 
 let truckTests =
 
     testList "Truck driving tests" [
         test "After driving one hour, a truck with cargo going to the port should be empty, going back to the factory and the cargo should be at the port warehouse" {
-        let warehouse, port, truckState = driveOneHour [] [] { Cargo = Some testCargoA; Destination = TruckDestination.Port; HoursLeftToDestination = 1 }
+        let warehouse, port, truckState = driveOneHour [] [] { Cargo = Some testCargoA; Destination = TruckDestination.Port; HoursLeftToDestination = 1 } 1
         Expect.equal truckState { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 } "Truck is not in the expected state"
         Expect.equal warehouse [] "Warehouse is not empty"
         Expect.equal port [testCargoA] "Port does not have exactly one container"
         }
 
         test "After driving one hour, a truck with cargo going to warehouse B with 5 hours remaining transit time should be in the same state but with 4 hours left" {
-            let warehouse, port, truckState = driveOneHour [] [] { Cargo = Some testCargoB; Destination = TruckDestination.WarehouseB; HoursLeftToDestination = 5 }
+            let warehouse, port, truckState = driveOneHour [] [] { Cargo = Some testCargoB; Destination = TruckDestination.WarehouseB; HoursLeftToDestination = 5 } 1
             Expect.equal truckState { Cargo = Some testCargoB; Destination = TruckDestination.WarehouseB; HoursLeftToDestination = 4 } "Truck is not in the expected state"
             Expect.equal warehouse [] "Warehouse is not empty"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After driving one hour, a truck with cargo going to warehouse B with 1 hour remaining transit time should be empty, going back to the factory with 5 hours left" {
-            let warehouse, port, truckState = driveOneHour [] [] { Cargo = Some testCargoB; Destination = TruckDestination.WarehouseB; HoursLeftToDestination = 1 }
+            let warehouse, port, truckState = driveOneHour [] [] { Cargo = Some testCargoB; Destination = TruckDestination.WarehouseB; HoursLeftToDestination = 1 } 1
             Expect.equal truckState { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 5 } "Truck is not in the expected state"
             Expect.equal warehouse [] "Warehouse is not empty"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After driving one hour, a empty truck going to an empty factory with 1 hour remaining transit time should be empty and idling" {
-            let warehouse, port, truckState = driveOneHour [] [] { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 }
+            let warehouse, port, truckState = driveOneHour [] [] { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 } 1
             Expect.equal truckState { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 } "Truck is not in the expected state"
             Expect.equal warehouse [] "Warehouse is not empty"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After driving one hour, an empty truck going to a factory containing cargo for warehouse A and 1 hour remaining transit time should be on the way to the port with the cargo and 1 hour remaining" {
-            let warehouse, port, truckState = driveOneHour [ testCargoA ] [] { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 }
+            let warehouse, port, truckState = driveOneHour [ testCargoA ] [] { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 } 1
             Expect.equal truckState { Cargo = Some testCargoA; Destination = TruckDestination.Port; HoursLeftToDestination = 1 } "Truck is not in the expected state"
             Expect.equal warehouse [] "Warehouse is not empty"
             Expect.equal port [] "Port is not empty"
         }
         
         test "After driving one hour, an empty truck going to a factory containing cargo for warehouses A and B and 1 hour remaining transit time should be on the way to the port with cargo A and 1 hour remaining, the factory should have a remaining container for warehouse B" {
-            let warehouse, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 }
+            let warehouse, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 } 1
             Expect.equal truckState { Cargo = Some testCargoA; Destination = TruckDestination.Port; HoursLeftToDestination = 1 } "Truck is not in the expected state"
             Expect.equal warehouse [testCargoB] "Warehouse should have a single container for warehouse B"
             Expect.equal port [] "Port is not empty"
         }
                
         test "After driving one hour, an idling truck at a factory containing cargo for warehouses A and B should have dropped the cargo at the port and be on the way back" {
-            let warehouse, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 }
+            let warehouse, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 } 1
             Expect.equal truckState { Cargo = None; Destination = TruckDestination.Factory; HoursLeftToDestination = 1 } "Truck is not in the expected state"
             Expect.equal warehouse [testCargoB] "Warehouse should have a single container for warehouse B"
             Expect.equal port [testCargoA] "Port should have a single container for warehouse A"
         }
         
         test "After one hour, an idling truck at an empty factory should still be idling" {
-            let warehouse, port, truckState = driveOneHour [] [] { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 }
+            let warehouse, port, truckState = driveOneHour [] [] { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 } 1
             Expect.equal truckState { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 } "Truck is not in the expected state"
             Expect.equal warehouse [] "Warehouse is not empty"
             Expect.equal port [] "Port is not empty"
@@ -225,7 +229,7 @@ let truckTests =
 
 runTests defaultConfig truckTests
 
-let sailOneHour (portOutboundQueue: Cargo list) (shipState : ShipState) =
+let sailOneHour (portOutboundQueue: Cargo list) (shipState : ShipState) (shipId: VehicleId) =
     let inline isArrivingAtPort s = s.HoursLeftToDestination = 1 && s.Destination = ShipDestination.Port
     let inline isArrivingAtWarehouseA s = s.HoursLeftToDestination = 1 && s.Destination = ShipDestination.WarehouseA
     let inline isAtSea s = s.HoursLeftToDestination > 1
@@ -249,31 +253,31 @@ let shipTests =
     testList "Ship sailing tests" [
         
         test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining will still be sailing, with 3 hours remaining" {
-            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 4 }
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 4 } 1
             Expect.equal shipState { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 3 } "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After one hour, a ship sailing to warehouse A with cargo, with 1 hours remaining should be sailing back empty to the port, with 4 hours remaining" {
-            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 1 }
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 1 } 1
             Expect.equal shipState { Cargo = None; Destination = ShipDestination.Port; HoursLeftToDestination = 4 } "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After one hour, a ship sailing to an empty port, with 1 hours remaining should be idling " {
-            let port, shipState = sailOneHour [] { Cargo = None; Destination = ShipDestination.Port; HoursLeftToDestination = 1 }
+            let port, shipState = sailOneHour [] { Cargo = None; Destination = ShipDestination.Port; HoursLeftToDestination = 1 } 1
             Expect.equal shipState { Cargo = None; Destination = ShipDestination.Idle; HoursLeftToDestination = 0 } "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After one hour, a ship sailing to a port with cargo, with 1 hours remaining should be going to warehouse A with the first cargo, with 4 hours remaining" {
-            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Destination = ShipDestination.Port; HoursLeftToDestination = 1 }
+            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Destination = ShipDestination.Port; HoursLeftToDestination = 1 } 1
             Expect.equal shipState { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 4 } "Ship is not in the expected state"
             Expect.equal port [testCargoA'] "Port should still have one container"
         }
 
         test "After one hour, a ship idling in port with cargo available should be going to warehouse A with the first cargo, with 4 hours remaining" {
-            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Destination = ShipDestination.Idle; HoursLeftToDestination = 0 }
+            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Destination = ShipDestination.Idle; HoursLeftToDestination = 0 } 1
             Expect.equal shipState { Cargo = Some testCargoA; Destination = ShipDestination.WarehouseA; HoursLeftToDestination = 4} "Ship is not in the expected state"
             Expect.equal port [testCargoA'] "Port should still have one container"
         }
@@ -281,35 +285,35 @@ let shipTests =
 
 runTests defaultConfig shipTests
 
-let moveOneHour factoryOutboundQueue portOutboundQueue vehicleState =
-    match vehicleState with
-    | ShipState shipState -> 
-        let portOutboundQueueAfterOneHour, shipStateAfterOneHour = sailOneHour portOutboundQueue shipState
-        factoryOutboundQueue, portOutboundQueueAfterOneHour, ShipState shipStateAfterOneHour
-    | TruckState truckState -> 
-        let factoryOutboundQueueAfterOneHour, portOutboundQueueAfterOneHour, truckStateAfterOneHour = driveOneHour factoryOutboundQueue portOutboundQueue truckState
-        factoryOutboundQueueAfterOneHour, portOutboundQueueAfterOneHour, TruckState truckStateAfterOneHour
+let moveOneHour factoryOutboundQueue portOutboundQueue vehicle =
+    match vehicle with
+    | Ship (id, shipState) -> 
+        let portOutboundQueueAfterOneHour, shipStateAfterOneHour = sailOneHour portOutboundQueue shipState id
+        factoryOutboundQueue, portOutboundQueueAfterOneHour, Ship (id, shipStateAfterOneHour)
+    | Truck (id, truckState) -> 
+        let factoryOutboundQueueAfterOneHour, portOutboundQueueAfterOneHour, truckStateAfterOneHour = driveOneHour factoryOutboundQueue portOutboundQueue truckState id
+        factoryOutboundQueueAfterOneHour, portOutboundQueueAfterOneHour, Truck (id, truckStateAfterOneHour)
 
 let initialState = [
-    TruckState { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 }
-    TruckState { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 }
-    ShipState { Cargo = None; Destination = ShipDestination.Idle; HoursLeftToDestination = 0 }
+    Truck (1, { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 })
+    Truck (2, { Cargo = None; Destination = TruckDestination.Idle; HoursLeftToDestination = 0 })
+    Ship (3, { Cargo = None; Destination = ShipDestination.Idle; HoursLeftToDestination = 0 })
 ]
 
 let deliver destinations =
-    let rec passTimeUntilAllContainersAreDelivered (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (vehicleStates : VehicleState list) hoursElapsed =
+    let rec passTimeUntilAllContainersAreDelivered (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (vehicles : Vehicle list) hoursElapsed =
         // printfn "%i\r\n%O\r\n%O\r\n\%O" hoursElapsed factoryOutboundQueue portOutboundQueue vehicleStates
 
-        if vehicleStates |> List.exists (fun v -> match v with | TruckState ts -> ts.Cargo.IsSome | ShipState ss -> ss.Cargo.IsSome) || not (factoryOutboundQueue |> List.isEmpty) || not (portOutboundQueue |> List.isEmpty) then
+        if vehicles |> List.exists (fun v -> match v with | Truck (_, truckState) -> truckState.Cargo.IsSome | Ship (_, shipState) -> shipState.Cargo.IsSome) || not (factoryOutboundQueue |> List.isEmpty) || not (portOutboundQueue |> List.isEmpty) then
             let letOneHourPass (currentFactoryOutboundQueue, currentPortOutboundQueue) vehicleState =
                 let factoryOutBoundQueueAfterOneHour, portOutboundQueueAfterOneHour, vehicleStateAfterOneHour = moveOneHour currentFactoryOutboundQueue currentPortOutboundQueue vehicleState
                 vehicleStateAfterOneHour, (factoryOutBoundQueueAfterOneHour,portOutboundQueueAfterOneHour)
 
-            let vehicleStatesAfterOneHour, (newFactoryOutboundQueue, newPortOutboundQueue) = vehicleStates |> List.mapFold letOneHourPass (factoryOutboundQueue, portOutboundQueue)
+            let vehicleStatesAfterOneHour, (newFactoryOutboundQueue, newPortOutboundQueue) = vehicles |> List.mapFold letOneHourPass (factoryOutboundQueue, portOutboundQueue)
             passTimeUntilAllContainersAreDelivered newFactoryOutboundQueue newPortOutboundQueue vehicleStatesAfterOneHour (hoursElapsed + 1)
         else
             hoursElapsed
-      
+
     passTimeUntilAllContainersAreDelivered destinations [] initialState 0
 
     
@@ -344,9 +348,13 @@ let deliveryTests =
     
 runTests defaultConfig deliveryTests
 
-let createCargoListFromInput (input:string) =
+let createCargoListFromInput (input: string) =
     input 
-    |> Seq.mapi (fun i c -> match c with | 'A' -> { Id = i; Destination = Warehouse.A } | 'B' -> { Id = i; Destination = Warehouse.B } | x -> failwithf "Invalid character %c" x)
+    |> Seq.mapi (fun index character -> 
+        match character with 
+        | 'A' -> { Id = index; Destination = Warehouse.A } 
+        | 'B' -> { Id = index; Destination = Warehouse.B } 
+        | invalid -> failwithf "Invalid character %c" invalid)
     |> Seq.toList
 
 // AABABBAB
