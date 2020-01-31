@@ -12,17 +12,13 @@ type Cargo =
         Destination: Warehouse
     }
 
-type TruckDestination =
-| WarehouseB
-| Port
+type Location =
 | Factory
-
-type ShipDestination =
-| WarehouseA
 | Port
+| WarehouseA
+| WarehouseB
 
 type VehicleId = int
-
 
 module EventLogging =
 
@@ -34,7 +30,7 @@ module EventLogging =
         | TRUCK
         | SHIP
 
-    type Location =
+    type LocationLogInfo =
         | FACTORY
         | PORT
         | A
@@ -43,8 +39,8 @@ module EventLogging =
     type CargoLogInfo = 
         {
             cargo_id: int
-            destination: Location
-            origin: Location
+            destination: LocationLogInfo
+            origin: LocationLogInfo
         }
 
     type Event =
@@ -53,8 +49,8 @@ module EventLogging =
             time: int
             transport_id: int
             kind: TransportKind
-            location: Location
-            destination: Location option
+            location: LocationLogInfo
+            destination: LocationLogInfo option
             cargo: CargoLogInfo list
         }
         
@@ -62,79 +58,52 @@ module EventLogging =
         
     let private config = JsonConfig.create (unformatted = true, serializeNone = SerializeNone.Omit)
    
-    let private logEvent evt =
-         Json.serializeEx config evt
+    let inline private serializeEvent evt = Json.serializeEx config evt
 
-    let inline private truckDestinationToLocation (d: TruckDestination) =
-        match d with
-        | WarehouseB -> B
-        | Factory -> FACTORY
-        | TruckDestination.Port -> PORT
-
-
-    let inline private shipDestinationToLocation (d: ShipDestination) =
+    let inline private locationToLocationLogInfo (d: Location) =
         match d with
         | WarehouseA -> A
+        | WarehouseB -> B
+        | Factory -> FACTORY
         | Port -> PORT
 
-    let inline private cargoToCargoInfo (cargo:Cargo) =
+    let inline private cargoToCargoInfo (cargo: Cargo) =
         {
             cargo_id = cargo.Id
             destination = match cargo.Destination with | Warehouse.A -> A | Warehouse.B -> B
             origin = FACTORY
         }
 
-    let logTruckDepartureEvent (time: int) (vehicleId: VehicleId) (location: TruckDestination) (destination: TruckDestination) (cargo: Cargo option) =
+    let private logEvent eventType kind (time: int) (vehicleId: VehicleId) (location: Location) (destination: Location option) (cargo: Cargo option) =
         let event = 
             {
-                event = DEPART
+                event = eventType
                 time = time
                 transport_id = vehicleId
-                kind = TRUCK
-                location = location |> truckDestinationToLocation
-                destination = Some (destination |> truckDestinationToLocation)
+                kind = kind
+                location = location |> locationToLocationLogInfo
+                destination = destination |> Option.map locationToLocationLogInfo
                 cargo = match cargo with | None -> [] | Some c -> [c |> cargoToCargoInfo]
             }
-        logEvent event |> System.Console.WriteLine
+        serializeEvent event |> System.Console.WriteLine
 
-    let logTruckArrivalEvent (time: int) (vehicleId: VehicleId) (location: TruckDestination) (cargo: Cargo option) =
-        let event = 
-            {
-                event = ARRIVE
-                time = time
-                transport_id = vehicleId
-                kind = TRUCK
-                location = location |> truckDestinationToLocation
-                destination = None
-                cargo = match cargo with | None -> [] | Some c -> [c |> cargoToCargoInfo]
-            }
-        logEvent event |> System.Console.WriteLine
+    let private logDepartureEvent kind (time: int) (vehicleId: VehicleId) (location: Location) (destination: Location) (cargo: Cargo option) =
+        logEvent DEPART kind time vehicleId location (Some destination) cargo
 
-    let logShipDepartureEvent (time: int) (vehicleId: VehicleId) (location: ShipDestination) (destination: ShipDestination) (cargo: Cargo option) =
-        let event = 
-            {
-                event = DEPART
-                time = time
-                transport_id = vehicleId
-                kind = SHIP
-                location = location |> shipDestinationToLocation
-                destination = Some (destination |> shipDestinationToLocation)
-                cargo = match cargo with | None -> [] | Some c -> [c |> cargoToCargoInfo]
-            }
-        logEvent event |> System.Console.WriteLine
+    let private logArrivalEvent kind (time: int) (vehicleId: VehicleId) (location: Location) (cargo: Cargo option) =
+         logEvent ARRIVE kind time vehicleId location None cargo
+         
+    let logTruckDepartureEvent (time: int) (vehicleId: VehicleId) (location: Location) (destination: Location) (cargo: Cargo option) =
+        logDepartureEvent TransportKind.TRUCK time vehicleId location destination cargo
 
-    let logShipArrivalEvent (time: int) (vehicleId: VehicleId) (location: ShipDestination) (cargo: Cargo option) =
-        let event = 
-            {
-                event = ARRIVE
-                time = time
-                transport_id = vehicleId
-                kind = SHIP
-                location = location |> shipDestinationToLocation
-                destination = None
-                cargo = match cargo with | None -> [] | Some c -> [c |> cargoToCargoInfo]
-            }
-        logEvent event |> System.Console.WriteLine
+    let logTruckArrivalEvent (time: int) (vehicleId: VehicleId) (location: Location) (cargo: Cargo option) =
+        logArrivalEvent TransportKind.TRUCK time vehicleId location cargo
+
+    let logShipDepartureEvent (time: int) (vehicleId: VehicleId) (location: Location) (destination: Location) (cargo: Cargo option) =
+        logDepartureEvent TransportKind.SHIP time vehicleId location destination cargo
+
+    let logShipArrivalEvent (time: int) (vehicleId: VehicleId) (location: Location) (cargo: Cargo option) =
+        logArrivalEvent TransportKind.TRUCK time vehicleId location cargo
 
 
 type TruckState =
