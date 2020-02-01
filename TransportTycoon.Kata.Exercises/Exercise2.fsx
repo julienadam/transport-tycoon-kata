@@ -114,11 +114,39 @@ type TruckState =
         Cargo: Cargo option
     }
 
+type Transit = {
+    Origin : Location
+    Destination : Location
+    HoursLeftToDestination: int
+}
+
+type VehicleLocation = 
+    | StoppedAt of Location
+    | InTransit of Transit
+
+let inline progressOneHour location =
+    match location with
+    | StoppedAt _ -> failwith "Vehicle has no destination and is stopped, it should not be able to progress"
+    | InTransit t -> InTransit { t with HoursLeftToDestination = t.HoursLeftToDestination - 1 }
+
+let inline isInTransit location =
+    match location with
+    | InTransit t -> t.HoursLeftToDestination > 1
+    | _ -> false
+
+let inline isArrivingAt destination location =
+    match location with
+    | InTransit t -> t.Destination = destination && t.HoursLeftToDestination = 1
+    | _ -> false
+
+let inline isStoppedAt stopLocation currentLocation =
+    match currentLocation with
+    | StoppedAt l -> l = stopLocation
+    | _ -> false
+
 type ShipState =
     {
-        Location: Location
-        Destination : Location option
-        HoursLeftToDestination : int
+        Location : VehicleLocation
         Cargo : Cargo option
     }
 
@@ -182,7 +210,6 @@ open Expecto
 let testCargoA = { Id = 1; Destination = Warehouse.A }
 let testCargoA' = { Id = 2; Destination = Warehouse.A }
 let testCargoB = { Id = 100; Destination = Warehouse.B }
-let testCargoB' = { Id = 101; Destination = Warehouse.B }
 
 let truckTests =
 
@@ -247,61 +274,56 @@ let truckTests =
 runTests defaultConfig truckTests
 
 let sailOneHour (portOutboundQueue: Cargo list) (shipState : ShipState) (shipId: VehicleId) (hoursElapsed: int)=
-    let inline isArrivingAtPort s = s.HoursLeftToDestination = 1 && s.Destination = Some Port
-    let inline isArrivingAtWarehouseA s = s.HoursLeftToDestination = 1 && s.Destination = Some WarehouseA
-    let inline isAtSea s = s.HoursLeftToDestination > 1
-    let inline isIdling s = s.Destination = None
-
     match portOutboundQueue, shipState with
-    | [], s when s |> isArrivingAtPort ->
+    | [], s when s.Location |> isArrivingAt Port ->
         logShipArrivalEvent hoursElapsed shipId Port None
-        [], { shipState with Destination = None; Location = Port; HoursLeftToDestination = 0 }
-    | firstContainer::otherContainers, s when s |> isArrivingAtPort ->
+        [], { shipState with Location = StoppedAt Port }
+    | firstContainer::otherContainers, s when s.Location |> isArrivingAt Port ->
         logShipArrivalEvent hoursElapsed shipId Port None
         logShipDepartureEvent hoursElapsed shipId Port WarehouseA (Some firstContainer)
-        otherContainers, { shipState with Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 4; Cargo = Some firstContainer }
-    | _, s when s |> isArrivingAtWarehouseA ->
+        otherContainers, { shipState with Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 }; Cargo = Some firstContainer }
+    | _, s when s.Location |> isArrivingAt WarehouseA ->
         logShipArrivalEvent hoursElapsed shipId WarehouseA s.Cargo
         logShipDepartureEvent hoursElapsed shipId WarehouseA Port None
-        portOutboundQueue, { s with Location = WarehouseA; Destination = Some Port; HoursLeftToDestination = 4; Cargo = None}
-    | _, s when s |> isAtSea ->
-        portOutboundQueue, { s with HoursLeftToDestination = s.HoursLeftToDestination - 1 }
-    | firstContainer::otherContainers, s when s |> isIdling ->
+        portOutboundQueue, { s with Location = InTransit { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 4 }; Cargo = None}
+    | _, s when s.Location |> isInTransit ->
+        portOutboundQueue, { s with Location = progressOneHour s.Location }
+    | firstContainer::otherContainers, s when s.Location |> isStoppedAt Port ->
         logShipDepartureEvent hoursElapsed shipId Port WarehouseA (Some firstContainer)
-        otherContainers, { shipState with Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 4; Cargo = Some firstContainer }
-    | [], s when s |> isIdling ->
+        otherContainers, { shipState with Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 }; Cargo = Some firstContainer }
+    | [], s when s.Location |> isStoppedAt Port ->
         portOutboundQueue, shipState
 
 let shipTests =
     testList "Ship sailing tests" [
 
         test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining will still be sailing, with 3 hours remaining" {
-            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 4 } 1 1
-            Expect.equal shipState { Cargo = Some testCargoA; Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 3 } "Ship is not in the expected state"
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 }} 1 1
+            Expect.equal shipState { Cargo = Some testCargoA; Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After one hour, a ship sailing to warehouse A with cargo, with 1 hours remaining should be sailing back empty to the port, with 4 hours remaining" {
-            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 1 } 1 1
-            Expect.equal shipState { Cargo = None; Location = WarehouseA; Destination = Some Port; HoursLeftToDestination = 4 } "Ship is not in the expected state"
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 1 }} 1 1
+            Expect.equal shipState { Cargo = None; Location = InTransit { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 4 } } "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After one hour, a ship sailing to an empty port, with 1 hours remaining should be idling " {
-            let port, shipState = sailOneHour [] { Cargo = None; Location = WarehouseA; Destination = Some Port; HoursLeftToDestination = 1 } 1 1
-            Expect.equal shipState { Cargo = None; Location = Port; Destination = None; HoursLeftToDestination = 0 } "Ship is not in the expected state"
+            let port, shipState = sailOneHour [] { Cargo = None; Location = InTransit { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 1 } } 1 1
+            Expect.equal shipState { Cargo = None; Location = StoppedAt Port } "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After one hour, a ship sailing to a port with cargo, with 1 hours remaining should be going to warehouse A with the first cargo, with 4 hours remaining" {
-            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = WarehouseA; Destination = Some Port; HoursLeftToDestination = 1 } 1 1
-            Expect.equal shipState { Cargo = Some testCargoA; Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 4 } "Ship is not in the expected state"
+            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = InTransit { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 1 } } 1 1
+            Expect.equal shipState { Cargo = Some testCargoA; Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 } } "Ship is not in the expected state"
             Expect.equal port [testCargoA'] "Port should still have one container"
         }
 
         test "After one hour, a ship idling in port with cargo available should be going to warehouse A with the first cargo, with 4 hours remaining" {
-            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = Port; Destination = None; HoursLeftToDestination = 0 } 1 1
-            Expect.equal shipState { Cargo = Some testCargoA; Location = Port; Destination = Some WarehouseA; HoursLeftToDestination = 4} "Ship is not in the expected state"
+            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = StoppedAt Port } 1 1
+            Expect.equal shipState { Cargo = Some testCargoA; Location = InTransit { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 }} "Ship is not in the expected state"
             Expect.equal port [testCargoA'] "Port should still have one container"
         }
   ]
@@ -320,10 +342,20 @@ let moveOneHour factoryOutboundQueue portOutboundQueue vehicle elapsed =
 let initialState = [
     Truck (0, { Cargo = None; Location = Factory; Destination = None; HoursLeftToDestination = 0 })
     Truck (1, { Cargo = None; Location = Factory; Destination = None; HoursLeftToDestination = 0 })
-    Ship (2, { Cargo = None; Location = Port; Destination = None; HoursLeftToDestination = 0 })
+    Ship (2, { Cargo = None; Location = StoppedAt Port })
 ]
 
+let createCargoListFromInput (input: string) =
+    input
+    |> Seq.mapi (fun index character ->
+        match character with
+        | 'A' -> { Id = index; Destination = Warehouse.A }
+        | 'B' -> { Id = index; Destination = Warehouse.B }
+        | invalid -> failwithf "Invalid character %c" invalid)
+    |> Seq.toList
+
 let deliver destinations =
+    let cargoList = destinations |> createCargoListFromInput
     let rec passTimeUntilAllContainersAreDelivered (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo list) (vehicles : Vehicle list) hoursElapsed =
         // printfn "%i\r\n%O\r\n%O\r\n\%O" hoursElapsed factoryOutboundQueue portOutboundQueue vehicleStates
 
@@ -337,53 +369,44 @@ let deliver destinations =
         else
             hoursElapsed
 
-    passTimeUntilAllContainersAreDelivered destinations [] initialState 0
+    passTimeUntilAllContainersAreDelivered cargoList [] initialState 0
 
 
 let deliveryTests =
     testList "Delivery tests" [
-            
+
         test "Delivering A takes 5 hours" {
-            let hoursElapsed = deliver [ testCargoA ]
+            let hoursElapsed = deliver "A"
             Expect.equal hoursElapsed 5 "Hours elapsed did not match expected time span"
         }
 
         test "Delivering B takes 5 hours" {
-            let hoursElapsed = deliver [ testCargoB ]
+            let hoursElapsed = deliver "B"
             Expect.equal hoursElapsed 5 "Hours elapsed did not match expected time span"
         }
 
         test "Delivering AB takes 5 hours" {
-            let hoursElapsed = deliver [ testCargoA; testCargoB ]
+            let hoursElapsed = deliver "AB"
             Expect.equal hoursElapsed 5 "Hours elapsed did not match expected time span"
         }
         
         test "Delivering BB takes 5 hours" {
-            let hoursElapsed = deliver [ testCargoB; testCargoB' ]
+            let hoursElapsed = deliver "BB"
             Expect.equal hoursElapsed 5 "Hours elapsed did not match expected time span"
         }
 
         test "Delivering ABB takes 7 hours" {
-            let hoursElapsed = deliver [ testCargoA; testCargoB; testCargoB' ]
+            let hoursElapsed = deliver "ABB"
             Expect.equal hoursElapsed 7 "Hours elapsed did not match expected time span"
         }
     ]
 
 runTests defaultConfig deliveryTests
 
-let createCargoListFromInput (input: string) =
-    input
-    |> Seq.mapi (fun index character ->
-        match character with
-        | 'A' -> { Id = index; Destination = Warehouse.A }
-        | 'B' -> { Id = index; Destination = Warehouse.B }
-        | invalid -> failwithf "Invalid character %c" invalid)
-    |> Seq.toList
-
-deliver ("AB" |> createCargoListFromInput)
+deliver "AB"
 
 // AABABBAB
-deliver ("AABABBAB" |> createCargoListFromInput)
+deliver "AABABBAB"
 
 // ABBBABAAABBB
-deliver ("ABBBABAAABBB" |> createCargoListFromInput)
+deliver "ABBBABAAABBB"
