@@ -18,13 +18,13 @@ type Location =
 | WarehouseA
 | WarehouseB
 
-type AvailableTruckLocation =
+type LandAccessibleLocation =
 | Factory
-| Port
+| PortTerminal
 | WarehouseB
 
-type AvailableShipLocation =
-| Port
+type SeaAccessibleLocation =
+| PortQuay
 | WarehouseA
 
 type VehicleId = int
@@ -71,16 +71,16 @@ module EventLogging =
 
     let consoleWriteSink evt = serializeEvent evt |> System.Console.WriteLine
 
-    let inline private truckLocationToLocation (t: AvailableTruckLocation) =
+    let inline private truckLocationToLocation (t: LandAccessibleLocation) =
         match t with
         | WarehouseB -> B
         | Factory -> FACTORY
-        | AvailableTruckLocation.Port -> PORT
+        | PortTerminal -> PORT
 
-    let inline private shipLocationToLocation (d: AvailableShipLocation) =
+    let inline private shipLocationToLocation (d: SeaAccessibleLocation) =
         match d with
         | WarehouseA -> A
-        | Port -> PORT
+        | PortQuay -> PORT
 
     let inline private cargoToCargoInfo (cargo: Cargo) =
         {
@@ -108,16 +108,16 @@ module EventLogging =
     let private logArrivalEvent kind (time: int) (vehicleId: VehicleId) (location: LocationLogInfo) (cargo: Cargo option) =
          logEvent ARRIVE kind time vehicleId location None cargo
 
-    let logTruckDepartureEvent (time: int) (vehicleId: VehicleId) (location: AvailableTruckLocation) (destination: AvailableTruckLocation) (cargo: Cargo option) =
+    let logTruckDepartureEvent (time: int) (vehicleId: VehicleId) (location: LandAccessibleLocation) (destination: LandAccessibleLocation) (cargo: Cargo option) =
         logDepartureEvent TRUCK time vehicleId (location |> truckLocationToLocation) (destination |> truckLocationToLocation) cargo
 
-    let logTruckArrivalEvent (time: int) (vehicleId: VehicleId) (location: AvailableTruckLocation) (cargo: Cargo option) =
+    let logTruckArrivalEvent (time: int) (vehicleId: VehicleId) (location: LandAccessibleLocation) (cargo: Cargo option) =
         logArrivalEvent TRUCK time vehicleId (location |> truckLocationToLocation) cargo
 
-    let logShipDepartureEvent (time: int) (vehicleId: VehicleId) (location: AvailableShipLocation) (destination: AvailableShipLocation) (cargo: Cargo option) =
+    let logShipDepartureEvent (time: int) (vehicleId: VehicleId) (location: SeaAccessibleLocation) (destination: SeaAccessibleLocation) (cargo: Cargo option) =
         logDepartureEvent SHIP time vehicleId (location |> shipLocationToLocation) (destination |> shipLocationToLocation) cargo
 
-    let logShipArrivalEvent (time: int) (vehicleId: VehicleId) (location: AvailableShipLocation) (cargo: Cargo option) =
+    let logShipArrivalEvent (time: int) (vehicleId: VehicleId) (location: SeaAccessibleLocation) (cargo: Cargo option) =
         logArrivalEvent SHIP time vehicleId (location |> shipLocationToLocation) cargo
 
 
@@ -132,12 +132,12 @@ type Transit<'a> when 'a : equality =
         member this.ProgressOneHour () = { this with HoursLeftToDestination = this.HoursLeftToDestination - 1 }
 
 type TruckLocation =
-    | Parked of AvailableTruckLocation * int
-    | OnTheRoad of Transit<AvailableTruckLocation>
+    | Parked of LandAccessibleLocation * int
+    | OnTheRoad of Transit<LandAccessibleLocation>
 
 type ShipLocation =
-    | Docked of AvailableShipLocation * int
-    | AtSea of Transit<AvailableShipLocation>
+    | Docked of SeaAccessibleLocation * int
+    | AtSea of Transit<SeaAccessibleLocation>
 
 type TruckState =
     {
@@ -182,14 +182,14 @@ let driveOneHour (factoryOutboundQueue: Cargo list) (portOutboundQueue: Cargo li
             logTruckArrivalEvent hoursElapsed truckId Factory None sink
         match cargoToPickup.Destination with
         | Warehouse.A ->
-            logTruckDepartureEvent hoursElapsed truckId Factory AvailableTruckLocation.Port (Some cargoToPickup) sink
-            restOfFactoryQueue, portOutboundQueue, { truckState with Cargo = (Some cargoToPickup); Location = Parked (AvailableTruckLocation.Port, 0) }
+            logTruckDepartureEvent hoursElapsed truckId Factory PortTerminal (Some cargoToPickup) sink
+            restOfFactoryQueue, portOutboundQueue, { truckState with Cargo = (Some cargoToPickup); Location = Parked (PortTerminal, 0) }
         | Warehouse.B ->
             logTruckDepartureEvent hoursElapsed truckId Factory WarehouseB (Some cargoToPickup) sink
-            restOfFactoryQueue, portOutboundQueue, { truckState with Cargo = Some cargoToPickup; Location = OnTheRoad { Origin = AvailableTruckLocation.Factory; Destination = WarehouseB; HoursLeftToDestination = FactoryToWarehouseBTransitTime - 1 } }
-    | Parked (AvailableTruckLocation.Port, _), _ -> 
-        logTruckArrivalEvent (hoursElapsed) truckId AvailableTruckLocation.Port truckState.Cargo sink
-        logTruckDepartureEvent hoursElapsed truckId AvailableTruckLocation.Port Factory None sink
+            restOfFactoryQueue, portOutboundQueue, { truckState with Cargo = Some cargoToPickup; Location = OnTheRoad { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = FactoryToWarehouseBTransitTime - 1 } }
+    | Parked (PortTerminal, _), _ -> 
+        logTruckArrivalEvent (hoursElapsed) truckId PortTerminal truckState.Cargo sink
+        logTruckDepartureEvent hoursElapsed truckId PortTerminal Factory None sink
         factoryOutboundQueue, (portOutboundQueue |> List.append [truckState.Cargo.Value]), { truckState with Cargo = None; Location = Parked (Factory, 0) }
     | Parked (WarehouseB, _), _ -> 
         logTruckArrivalEvent (hoursElapsed) truckId WarehouseB truckState.Cargo sink
@@ -213,7 +213,7 @@ let truckTests =
     testList "Truck driving tests" [
         test "After driving one hour, a truck going to the port should be waiting at the port with the cargo picked up at the factory" {
         let factory, port, truckState = driveOneHour [testCargoA] [] { Cargo = None; Location = Parked (Factory, 0)} 1 1 consoleWriteSink
-        Expect.equal truckState { Cargo = Some testCargoA; Location = Parked (AvailableTruckLocation.Port, 0)} "Truck is not in the expected state"
+        Expect.equal truckState { Cargo = Some testCargoA; Location = Parked (PortTerminal, 0)} "Truck is not in the expected state"
         Expect.equal factory [] "Factory is not empty"
         Expect.equal port [] "Port does not have exactly one container"
         }
@@ -233,21 +233,21 @@ let truckTests =
         }
 
         test "After driving one hour, a empty truck going to an empty factory with 1 hour remaining transit time should be empty and idling" {
-            let factory, port, truckState = driveOneHour [] [] { Cargo = None; Location = OnTheRoad { Origin = AvailableTruckLocation.Port; Destination = Factory; HoursLeftToDestination = 1 }} 1 1 consoleWriteSink
+            let factory, port, truckState = driveOneHour [] [] { Cargo = None; Location = OnTheRoad { Origin = PortTerminal; Destination = Factory; HoursLeftToDestination = 1 }} 1 1 consoleWriteSink
             Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) } "Truck is not in the expected state"
             Expect.equal factory [] "Factory is not empty"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After driving one hour, an empty truck going to a factory containing cargo for warehouse A and 1 hour remaining transit time should be stopped at the factory" {
-            let factory, port, truckState = driveOneHour [ testCargoA ] [] { Cargo = None; Location = OnTheRoad { Origin = AvailableTruckLocation.Port; Destination = Factory; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
+            let factory, port, truckState = driveOneHour [ testCargoA ] [] { Cargo = None; Location = OnTheRoad { Origin = PortTerminal; Destination = Factory; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
             Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) }  "Truck is not in the expected state"
             Expect.equal factory [testCargoA] "Container should still be at the factory"
             Expect.equal port [] "Port is not empty"
         }
 
         test "After driving one hour, an empty truck going to a factory containing cargo for warehouses A and B and 1 hour remaining transit time should be stopped at the factory" {
-            let factory, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Location = OnTheRoad { Origin = AvailableTruckLocation.Port; Destination = Factory; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
+            let factory, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Location = OnTheRoad { Origin = PortTerminal; Destination = Factory; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
             Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) } "Truck is not in the expected state"
             Expect.equal factory [testCargoA; testCargoB] "Factory should still have both containers"
             Expect.equal port [] "Port is not empty"
@@ -255,13 +255,13 @@ let truckTests =
 
         test "After driving one hour, an idling truck at a factory containing cargo for warehouses A and B should be stopped at the port with the cargo" {
             let factory, port, truckState = driveOneHour [ testCargoA; testCargoB ] [] { Cargo = None; Location = Parked (Factory, 0) } 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = Some testCargoA; Location = Parked (AvailableTruckLocation.Port, 0) } "Truck is not in the expected state"
+            Expect.equal truckState { Cargo = Some testCargoA; Location = Parked (PortTerminal, 0) } "Truck is not in the expected state"
             Expect.equal factory [testCargoB] "Factory should have a single container for warehouse B"
             Expect.equal port [] "Port should be empty"
         }
 
         test "After one hour, a truck stopped at the port with cargo should be stopped at the factory and the cargo should be in the port" {
-            let factory, port, truckState = driveOneHour [] [] { Cargo = Some testCargoA; Location = Parked (AvailableTruckLocation.Port, 0) } 1 1 consoleWriteSink
+            let factory, port, truckState = driveOneHour [] [] { Cargo = Some testCargoA; Location = Parked (PortTerminal, 0) } 1 1 consoleWriteSink
             Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) } "Truck is not in the expected state"
             Expect.equal factory [] "Factory is not empty"
             Expect.equal port [testCargoA] "Port should the container dropped by the truck"
@@ -286,56 +286,66 @@ runTests defaultConfig truckTests
 
 let sailOneHour (portOutboundQueue: Cargo list) (shipState : ShipState) (shipId: VehicleId) (hoursElapsed: int) (sink: Event -> unit)=
     match portOutboundQueue, shipState.Location with
-    | [], AtSea t when t.IsArrivingAt Port ->
-        logShipArrivalEvent (hoursElapsed + 1) shipId Port None sink
-        [], { shipState with Location = Docked (Port, 0) }
-    | firstContainer::otherContainers, AtSea t when t.IsArrivingAt Port  ->
-        logShipArrivalEvent (hoursElapsed + 1) shipId Port None sink
-        logShipDepartureEvent (hoursElapsed + 1) shipId Port WarehouseA (Some firstContainer) sink
-        otherContainers, { shipState with Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 }; Cargo = Some firstContainer }
+    | _, AtSea t when t.IsArrivingAt PortQuay ->
+        portOutboundQueue, { shipState with Location = Docked (PortQuay, 0) }
     | _, AtSea t when t.IsArrivingAt WarehouseA ->
-        logShipArrivalEvent (hoursElapsed + 1) shipId WarehouseA shipState.Cargo sink
-        logShipDepartureEvent (hoursElapsed + 1) shipId WarehouseA Port None sink
-        portOutboundQueue, { shipState with Location = AtSea { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 4 }; Cargo = None}
+        portOutboundQueue, { shipState with Location = Docked (WarehouseA, 0) }
     | _, AtSea t ->
         portOutboundQueue, { shipState with Location = AtSea (t.ProgressOneHour ()) }
-    | firstContainer::otherContainers, Docked (Port, 0) ->
-        logShipDepartureEvent hoursElapsed shipId Port WarehouseA (Some firstContainer) sink
-        otherContainers, { shipState with Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 3 }; Cargo = Some firstContainer }
-    | [], Docked (Port, 0) ->
+    | _, Docked (WarehouseA, _) ->
+        logShipArrivalEvent hoursElapsed shipId WarehouseA shipState.Cargo sink
+        logShipDepartureEvent hoursElapsed shipId WarehouseA PortQuay None sink
+        portOutboundQueue, { shipState with Location = AtSea { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }; Cargo = None }
+    | [], Docked (PortQuay, _) ->
         portOutboundQueue, shipState
-
+    | firstContainer::otherContainers, Docked (PortQuay, _) ->
+        logShipArrivalEvent hoursElapsed shipId PortQuay None sink
+        logShipDepartureEvent hoursElapsed shipId PortQuay WarehouseA (Some firstContainer) sink
+        otherContainers, { shipState with Location = AtSea { Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }; Cargo = Some firstContainer }
+    
 let shipTests =
     testList "Ship sailing tests" [
 
-        test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining will still be sailing, with 3 hours remaining" {
-            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 }} 1 1 consoleWriteSink
-            Expect.equal shipState { Cargo = Some testCargoA; Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
+        test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining should still be sailing, with 3 hours remaining" {
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = AtSea { Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 4 }} 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = Some testCargoA; Location = AtSea { Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
-        test "After one hour, a ship sailing to warehouse A with cargo, with 1 hours remaining should be sailing back empty to the port, with 4 hours remaining" {
-            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 1 }} 1 1 consoleWriteSink
-            Expect.equal shipState { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 4 } } "Ship is not in the expected state"
+        test "After one hour, a ship sailing to port with 4 hours remaining should still be sailing, with 3 hours remaining" {
+            let port, shipState = sailOneHour [] { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 4 }} 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
-        test "After one hour, a ship sailing to an empty port, with 1 hours remaining should be idling " {
-            let port, shipState = sailOneHour [] { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
-            Expect.equal shipState { Cargo = None; Location = Docked (Port, 0) } "Ship is not in the expected state"
+        test "After one hour, a ship sailing to warehouse A with cargo, with 1 hours remaining should be docked at WarehouseA, still unloaded" {
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = AtSea { Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 1 }} 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = Some testCargoA; Location = Docked (WarehouseA, 0)} "Ship is not in the expected state"
             Expect.equal port [] "Port is not empty"
         }
 
-        test "After one hour, a ship sailing to a port with cargo, with 1 hours remaining should be going to warehouse A with the first cargo, with 4 hours remaining" {
-            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = Port; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
-            Expect.equal shipState { Cargo = Some testCargoA; Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 4 } } "Ship is not in the expected state"
+        test "After one hour, a ship sailing to port, with 1 hours remaining should be docked at the port" {
+            let port, shipState = sailOneHour [] { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = None; Location = Docked (PortQuay, 0) } "Ship is not in the expected state"
+            Expect.equal port [] "Port is not empty"
+        }
+
+        test "After one hour, a ship sailing to port with 1 hours remaining should be docked at the port" {
+            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = None; Location = Docked (PortQuay, 0)} "Ship is not in the expected state"
+            Expect.equal port [testCargoA; testCargoA'] "Port should still have both containers"
+        }
+
+        test "After one hour, a ship docked in port with cargo available should be going to warehouse A with the first cargo, with 3 hours remaining" {
+            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = Docked (PortQuay, 0) } 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = Some testCargoA; Location = AtSea { Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
             Expect.equal port [testCargoA'] "Port should still have one container"
         }
 
-        test "After one hour, a ship idling in port with cargo available should be going to warehouse A with the first cargo, with 3 hours remaining" {
-            let port, shipState = sailOneHour [testCargoA; testCargoA'] { Cargo = None; Location = Docked (Port, 0) } 1 1 consoleWriteSink
-            Expect.equal shipState { Cargo = Some testCargoA; Location = AtSea { Origin = Port; Destination = WarehouseA; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
-            Expect.equal port [testCargoA'] "Port should still have one container"
+        test "After one hour, a ship docked at warehouse A should be unloaded and on the way to the port with 3 hours remaining" {
+            let port, shipState = sailOneHour [] { Cargo = Some testCargoA; Location = Docked (WarehouseA, 0) } 1 1 consoleWriteSink
+            Expect.equal shipState { Cargo = None; Location = AtSea { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }} "Ship is not in the expected state"
+            Expect.equal port [] "Port should still have one container"
         }
   ]
 
@@ -353,7 +363,7 @@ let moveOneHour factoryOutboundQueue portOutboundQueue vehicle elapsed sink =
 let initialState = [
     Truck (0, { Cargo = None; Location = Parked (Factory, 0) })
     Truck (1, { Cargo = None; Location = Parked (Factory, 0) })
-    Ship (2, { Cargo = None; Location = Docked (Port, 0) })
+    Ship (2, { Cargo = None; Location = Docked (PortQuay, 0) })
 ]
 
 let createCargoListFromInput (input: string) =
