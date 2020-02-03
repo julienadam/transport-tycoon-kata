@@ -133,11 +133,11 @@ type ShipLocation =
     | Docked of SeaAccessibleLocation * int
     | AtSea of Transit<SeaAccessibleLocation>
 
-type TruckState =
-    {
-        Location : TruckLocation
-        Cargo: Cargo option
-    }
+// type TruckState =
+//     {
+//         Location : TruckLocation
+//         Cargo: Cargo option
+//     }
     
 //type PickupLocation = 
 //| PortQuay
@@ -185,116 +185,145 @@ let WarehouseBToFactoryTransitTime = FactoryToWarehouseBTransitTime
 
 open EventLogging
 
-let driveOneHour (cargoTracker: CargoTracker) (truckState: TruckState) (truckId: VehicleId ) (hoursElapsed: int) (sink: Event -> unit) =
-    match truckState.Location with
-    | Parked (Factory, hours) ->
-        if hoursElapsed > 0 && hours = 0 then
-            logTruckArrivalEvent hoursElapsed truckId Factory None sink
 
-        let cargo, tracker = cargoTracker.TryPickupAtFactory truckId
-        match cargo with
-        | None -> tracker, { truckState with Location = Parked (Factory, hours + 1) }
-        | Some cargoToPickup ->
-            match cargoToPickup.Destination with
-            | Warehouse.A ->
-                logTruckDepartureEvent hoursElapsed truckId Factory PortTerminal (Some cargoToPickup) sink
-                tracker, { truckState with Cargo = (Some cargoToPickup); Location = Parked (PortTerminal, 0) }
-            | Warehouse.B ->
-                logTruckDepartureEvent hoursElapsed truckId Factory WarehouseB (Some cargoToPickup) sink
-                tracker, { truckState with Cargo = Some cargoToPickup; Location = OnTheRoad { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = FactoryToWarehouseBTransitTime - 1 } }
-    | Parked (PortTerminal, _) -> 
-        logTruckArrivalEvent (hoursElapsed) truckId PortTerminal truckState.Cargo sink
-        logTruckDepartureEvent hoursElapsed truckId PortTerminal Factory None sink
-        cargoTracker.DropOffAtPort(truckState.Cargo.Value), { truckState with Cargo = None; Location = Parked (Factory, 0) }
-    | Parked (WarehouseB, _) -> 
-        logTruckArrivalEvent (hoursElapsed) truckId WarehouseB truckState.Cargo sink
-        logTruckDepartureEvent (hoursElapsed) truckId WarehouseB Factory None sink
-        (cargoTracker.Deliver truckState.Cargo.Value truckId hoursElapsed), { truckState with Cargo = None; Location = OnTheRoad { Origin = WarehouseB; Destination = Factory; HoursLeftToDestination = WarehouseBToFactoryTransitTime - 1 }}
-    | OnTheRoad t when t.IsArrivingAt Factory ->
-        cargoTracker, { truckState with Location = Parked (Factory, 0)}
-    | OnTheRoad t when t.IsArrivingAt WarehouseB ->
-        cargoTracker, { truckState with Location = Parked (WarehouseB, 0)}
-    | OnTheRoad t ->
-        cargoTracker, { truckState with Location = OnTheRoad (t.ProgressOneHour()) }
+type LadenParkedTruck = {
+    ParkedAt : LandAccessibleLocation
+    Cargo: Cargo
+}
+with 
+    member this.UnloadAndDepart () =
+        match this.ParkedAt with
+        | WarehouseB -> DrivingTruck { Transit = { Origin = WarehouseB; Destination = Factory; HoursLeftToDestination = 4 }; Cargo = None }
+        | PortTerminal -> UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 0}
+        | Factory -> failwithf "not possible" // TODO: make it impossible
+and UnladenParkedTruck = {
+    ParkedAt : LandAccessibleLocation
+    HoursWaited : int
+}
+with
+    member this.Wait() = 
+        UnladenParkedTruck { this with HoursWaited = this.HoursWaited + 1 }
+    member this.LoadAndDepart (cargo: Cargo) =
+        match cargo.Destination with 
+        | Warehouse.A -> LadenParkedTruck { ParkedAt = PortTerminal; Cargo = cargo }
+        | Warehouse.B -> DrivingTruck { Transit = { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 4 }; Cargo = Some cargo }
+
+and DrivingTruck = {
+    Transit: Transit<LandAccessibleLocation>
+    Cargo: Cargo option
+}
+with 
+    member this.DriveOn () =
+        match this.Transit.HoursLeftToDestination with
+        | 1 -> 
+            match this.Cargo with
+            | Some c -> LadenParkedTruck { ParkedAt = this.Transit.Destination; Cargo = c }
+            | None -> UnladenParkedTruck { ParkedAt = this.Transit.Destination; HoursWaited = 0 }
+        | _ -> DrivingTruck { this with Transit = this.Transit.ProgressOneHour() }
+
+and TruckState =
+| LadenParkedTruck of LadenParkedTruck
+| UnladenParkedTruck of UnladenParkedTruck
+| DrivingTruck of DrivingTruck
+
+type IdentifiableVehicle<'a> = {
+    Id: VehicleId
+    State: 'a
+}
+
+type Truck = IdentifiableVehicle<TruckState>
+
+let driveOneHour (cargoTracker: CargoTracker) (truck: Truck) (hoursElapsed: int) (sink: Event -> unit) =
+    match truck.State with
+    | LadenParkedTruck truckState ->
+        logTruckArrivalEvent hoursElapsed truck.Id truckState.ParkedAt (Some truckState.Cargo) sink
+        logTruckDepartureEvent hoursElapsed truck.Id truckState.ParkedAt Factory None sink
+        match truckState.ParkedAt with
+        | PortTerminal -> (cargoTracker.DropOffAtPort truckState.Cargo), truckState.UnloadAndDepart()
+        | WarehouseB -> (cargoTracker.Deliver truckState.Cargo truck.Id hoursElapsed), truckState.UnloadAndDepart()
+        | _ -> failwithf "impossible" // TODO: make it impossible
+    | DrivingTruck truckState -> 
+        cargoTracker, truckState.DriveOn()
+    | UnladenParkedTruck truckState ->
+        if truckState.HoursWaited = 0 then
+            logTruckArrivalEvent hoursElapsed truck.Id Factory None sink
+        match cargoTracker.TryPickupAtFactory truck.Id with
+        | Some c, tracker ->
+            let dest = 
+                match c.Destination with
+                | Warehouse.A -> PortTerminal
+                | Warehouse.B -> WarehouseB
+            logTruckDepartureEvent hoursElapsed truck.Id Factory dest (Some c) sink
+            tracker, truckState.LoadAndDepart c
+        | None, tracker -> 
+            tracker, truckState.Wait()
 
 open Expecto
 
 let testCargoA = { Id = 1; Destination = Warehouse.A }
-let testCargoA' = { Id = 2; Destination = Warehouse.A }
 let testCargoB = { Id = 100; Destination = Warehouse.B }
 
 let truckTests =
 
-   testList "Truck driving tests" [
-        test "After driving one hour, a truck going to the port should be waiting at the port with the cargo picked up at the factory" {
+   testList "Truck tests" [
+        test "After one hour, a truck at the factory should have picked up the first available container and be at the port with it" {
             let initialTracker = CargoTracker.Empty.AddToFactoryQueue testCargoA
-            let tracker, truckState = driveOneHour initialTracker { Cargo = None; Location = Parked (Factory, 0)} 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = Some testCargoA; Location = Parked (PortTerminal, 0)} "Truck is not in the expected state"
+            let tracker, truckState = driveOneHour initialTracker { Id = 1; State = (UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 0})} 1 consoleWriteSink
+            Expect.equal truckState (LadenParkedTruck { ParkedAt = PortTerminal; Cargo = testCargoA }) "Truck is not in the expected state"
             Expect.equal tracker.FactoryOutboundQueue [] "Factory is not empty"
             Expect.equal tracker.PortOutboundQueue [] "Port is not empty"
             Expect.equal tracker.InTransit [testCargoA, 1] "Port is not empty"
         }
 
-        test "After driving one hour, a truck with cargo going to warehouse B with 5 hours remaining transit time should be in the same state but with 4 hours left" {
-            let tracker, truckState = driveOneHour CargoTracker.Empty { Cargo = Some testCargoB; Location = OnTheRoad { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 5 }} 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = Some testCargoB; Location = OnTheRoad { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 4 } } "Truck is not in the expected state"
-            Expect.equal tracker.FactoryOutboundQueue [] "Factory is not empty"
-            Expect.equal tracker.PortOutboundQueue [] "Port is not empty"
+        test "After one hour, a truck with cargo going to warehouse B with 4 hours remaining transit time should be in the same state but with 3 hours left" {
+            let tracker, truckState = driveOneHour CargoTracker.Empty { Id = 1; State = (DrivingTruck { Transit = { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 4 }; Cargo = Some testCargoB })} 1 consoleWriteSink
+            Expect.equal truckState (DrivingTruck { Transit = { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 3 }; Cargo = Some testCargoB }) "Truck is not in the expected state"
+            Expect.equal tracker CargoTracker.Empty ""
         }
 
-        test "After driving one hour, a truck with cargo going to warehouse B with 1 hour remaining transit time should be stopped at the warehouse" {
-            let tracker, truckState = driveOneHour CargoTracker.Empty { Cargo = Some testCargoB; Location = OnTheRoad { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 1 }} 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = Some testCargoB; Location = Parked (WarehouseB, 0) } "Truck is not in the expected state"
-            Expect.equal tracker.FactoryOutboundQueue [] "Factory is not empty"
-            Expect.equal tracker.PortOutboundQueue [] "Port is not empty"
+        test "After one hour, a truck with cargo going to warehouse B with 1 hour remaining transit time should be parked at the warehouse" {
+            let tracker, truckState = driveOneHour CargoTracker.Empty { Id = 1; State = (DrivingTruck { Transit = { Origin = Factory; Destination = WarehouseB; HoursLeftToDestination = 1 }; Cargo = Some testCargoB })} 1 consoleWriteSink
+            Expect.equal truckState (LadenParkedTruck { ParkedAt = WarehouseB; Cargo = testCargoB }) "Truck is not in the expected state"
+            Expect.equal tracker CargoTracker.Empty ""
         }
 
-        test "After driving one hour, a empty truck going to an empty factory with 1 hour remaining transit time should be empty and idling" {
-            let tracker, truckState = driveOneHour CargoTracker.Empty { Cargo = None; Location = OnTheRoad { Origin = PortTerminal; Destination = Factory; HoursLeftToDestination = 1 }} 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) } "Truck is not in the expected state"
-            Expect.equal tracker.FactoryOutboundQueue [] "Factory is not empty"
-            Expect.equal tracker.PortOutboundQueue [] "Port is not empty"
+        test "After one hour, a empty truck going to the factory with 1 hour remaining transit time should be parked at the factory" {
+            let tracker, truckState = driveOneHour CargoTracker.Empty { Id = 1; State = (DrivingTruck { Transit = { Origin = WarehouseB; Destination = Factory; HoursLeftToDestination = 1 }; Cargo = None })} 1 consoleWriteSink
+            Expect.equal truckState (UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 0}) "Truck is not in the expected state"
+            Expect.equal tracker CargoTracker.Empty ""
         }
 
-        test "After driving one hour, an empty truck going to a factory containing cargo for warehouse A and 1 hour remaining transit time should be stopped at the factory" {
-            let initialTracker = CargoTracker.Empty.AddToFactoryQueue testCargoA
-            let tracker, truckState = driveOneHour initialTracker { Cargo = None; Location = OnTheRoad { Origin = PortTerminal; Destination = Factory; HoursLeftToDestination = 1 } } 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) }  "Truck is not in the expected state"
-            Expect.equal tracker initialTracker ""
-        }
-
-        test "After driving one hour, a parked truck at a factory containing cargo for warehouses A and B should be parked at the port with the cargo" {
+        test "After one hour, a parked truck at a factory containing cargo for warehouses A and B should be parked at the port with cargo A" {
             let initialTracker = CargoTracker.Empty.AddToFactoryQueue(testCargoA, testCargoB)
-            let tracker, truckState = driveOneHour initialTracker { Cargo = None; Location = Parked (Factory, 0) } 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = Some testCargoA; Location = Parked (PortTerminal, 0) } "Truck is not in the expected state"
+            let tracker, truckState = driveOneHour initialTracker { Id = 1; State = (UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 0})} 1 consoleWriteSink
+            Expect.equal truckState (LadenParkedTruck { ParkedAt = PortTerminal; Cargo = testCargoA}) "Truck is not in the expected state"
             Expect.equal tracker.FactoryOutboundQueue [testCargoB] ""
             Expect.equal tracker.InTransit [testCargoA, 1] ""
         }
 
-        test "After one hour, a truck stopped at the port with cargo should be stopped at the factory and the cargo should be in the port" {
+        test "After one hour, a truck parked at the port with cargo should be back at the factory and the cargo should have been unloaded in the port" {
             let initialTracker = CargoTracker.Empty
-            let tracker, truckState = driveOneHour initialTracker { Cargo = Some testCargoA; Location = Parked (PortTerminal, 0) } 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = None; Location = Parked (Factory, 0) } "Truck is not in the expected state"
+            let tracker, truckState = driveOneHour initialTracker { Id = 1; State = (LadenParkedTruck { ParkedAt = PortTerminal; Cargo = testCargoA})} 1 consoleWriteSink
+            Expect.equal truckState (UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 0}) "Truck is not in the expected state"
             Expect.equal tracker.FactoryOutboundQueue [] "Factory is not empty"
             Expect.equal tracker.PortOutboundQueue [testCargoA] "Port should contain the cargo dropped off by the truck"
-            Expect.equal tracker.InTransit [] ""
         }
 
         test "After one hour, a parked truck at an empty factory should still be parked" {
             let initialTracker = CargoTracker.Empty
-            let tracker, truckState = driveOneHour initialTracker { Cargo = None; Location = Parked (Factory, 0) } 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = None; Location = Parked (Factory, 1) } "Truck is not in the expected state"
+            let tracker, truckState = driveOneHour initialTracker { Id = 1; State = (UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 0})} 1 consoleWriteSink
+            Expect.equal truckState (UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 1}) "Truck is not in the expected state"
             Expect.equal tracker initialTracker ""
         }
 
-        test "After one hour, a truck stopped at warehouseB should be empty, going to the factory with 4 hours left" {
+        test "After one hour, a truck parked at warehouseB should be going back empty to the factory with 4 hours left" {
             let initialTracker = CargoTracker.Empty
-            let tracker, truckState = driveOneHour initialTracker { Cargo = Some testCargoB; Location = Parked (WarehouseB, 0) } 1 1 consoleWriteSink
-            Expect.equal truckState { Cargo = None; Location = OnTheRoad { Origin = WarehouseB; Destination = Factory; HoursLeftToDestination = 4 } } "Truck is not in the expected state"
+            let tracker, truckState = driveOneHour initialTracker { Id = 1; State = (LadenParkedTruck { ParkedAt = WarehouseB; Cargo = testCargoB})} 1 consoleWriteSink
+            Expect.equal truckState (DrivingTruck { Transit = { Origin = WarehouseB; Destination = Factory; HoursLeftToDestination = 4 }; Cargo = None }) "Truck is not in the expected state"
             Expect.equal tracker.FactoryOutboundQueue [] "Factory is not empty"
             Expect.equal tracker.PortOutboundQueue [] ""
             Expect.equal tracker.InTransit [] "Port should the container dropped by the truck"
-            Expect.equal tracker.Delivered [testCargoB, 1, 0] "Port should the container dropped by the truck"
+            Expect.equal tracker.Delivered [testCargoB, 1, 1] "Port should the container dropped by the truck"
         }
  ]
 
@@ -336,22 +365,24 @@ and ShipState =
 | UnladenDockedShip of UnladenDockedShip
 | SailingShip of SailingShip
 
-let sailOneHour (cargoTracker: CargoTracker) (shipState : ShipState) (shipId: VehicleId) (hoursElapsed: int) (sink: Event -> unit)=
-    match shipState with
+type Ship = IdentifiableVehicle<ShipState>
+
+let sailOneHour (cargoTracker: CargoTracker) (vehicle: Ship) (hoursElapsed: int) (sink: Event -> unit)=
+    match vehicle.State with
     | SailingShip ship ->
         cargoTracker, ship.SailOn ()
     | LadenDockedShip ship ->
-        logShipArrivalEvent hoursElapsed shipId WarehouseA (Some ship.Cargo) sink
-        logShipDepartureEvent hoursElapsed shipId WarehouseA PortQuay None sink
-        cargoTracker.Deliver ship.Cargo shipId hoursElapsed, ship.UnloadAndCastOut()
+        logShipArrivalEvent hoursElapsed vehicle.Id WarehouseA (Some ship.Cargo) sink
+        logShipDepartureEvent hoursElapsed vehicle.Id WarehouseA PortQuay None sink
+        cargoTracker.Deliver ship.Cargo vehicle.Id hoursElapsed, ship.UnloadAndCastOut()
     | UnladenDockedShip ship ->
         if ship.HoursWaited = 0 then
-            logShipArrivalEvent hoursElapsed shipId PortQuay None sink
-        match cargoTracker.TryPickupAtPort shipId with
+            logShipArrivalEvent hoursElapsed vehicle.Id PortQuay None sink
+        match cargoTracker.TryPickupAtPort vehicle.Id with
         | None, tracker ->
             tracker, ship.Wait()
         | Some cargo, tracker ->
-            logShipDepartureEvent hoursElapsed shipId PortQuay WarehouseA (Some cargo) sink
+            logShipDepartureEvent hoursElapsed vehicle.Id PortQuay WarehouseA (Some cargo) sink
             tracker, ship.LoadAndCastOut cargo
 
 //let shipTests =
@@ -403,28 +434,23 @@ let sailOneHour (cargoTracker: CargoTracker) (shipState : ShipState) (shipId: Ve
 
 //runTests defaultConfig shipTests
 
-type IdentifiableVehicle<'a> = {
-    Id: VehicleId
-    Vehicle: 'a
-}
-
 type Vehicle =
-    | Truck of IdentifiableVehicle<TruckState>
-    | Ship of IdentifiableVehicle<ShipState>
+    | Truck of Truck
+    | Ship of Ship
 
 let moveOneHour (cargoTracker: CargoTracker) vehicle elapsed sink =
     match vehicle with
-    | Ship { Id = id; Vehicle = state } ->
-        let cargoTrackerAfterOneHour, shipStateAfterOneHour = sailOneHour cargoTracker state id elapsed sink
-        cargoTrackerAfterOneHour, Ship { Id = id; Vehicle = shipStateAfterOneHour }
-    | Truck { Id = id; Vehicle = truckState } ->
-        let cargoTrackerAfterOneHour, truckStateAfterOneHour = driveOneHour cargoTracker truckState id elapsed sink
-        cargoTrackerAfterOneHour, Truck { Id = id; Vehicle = truckStateAfterOneHour }
+    | Ship ship ->
+        let cargoTrackerAfterOneHour, shipStateAfterOneHour = sailOneHour cargoTracker ship elapsed sink
+        cargoTrackerAfterOneHour, Ship { Id = ship.Id; State = shipStateAfterOneHour }
+    | Truck truck ->
+        let cargoTrackerAfterOneHour, truckStateAfterOneHour = driveOneHour cargoTracker truck elapsed sink
+        cargoTrackerAfterOneHour, Truck { Id = truck.Id; State = truckStateAfterOneHour }
 
 let initialState = [
-    Truck { Id = 0; Vehicle = { Cargo = None; Location = Parked (Factory, 0) } }
-    Truck { Id = 1; Vehicle = { Cargo = None; Location = Parked (Factory, 0) } }
-    Ship { Id = 2; Vehicle = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 } }
+    Truck { Id = 0; State = UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 1 } } // TODO: specific initial state instead of 1 to avoid arrival event
+    Truck { Id = 1; State = UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 1 } }
+    Ship { Id = 2; State = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 1 } }
 ]
 
 let createCargoTrackerFromInput (input: string) =
@@ -439,7 +465,7 @@ let createCargoTrackerFromInput (input: string) =
 
 let deliver destinations sink =
     let cargoTracker = destinations |> createCargoTrackerFromInput
-    
+
     let rec passTimeUntilAllContainersAreDelivered (cargoTracker:CargoTracker) (vehicles : Vehicle list) hoursElapsed =
         match cargoTracker.AllCargoDelivered ()with
         | Some h -> h
