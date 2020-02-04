@@ -1,5 +1,11 @@
 ﻿#load @"..\.paket\load\netcoreapp3.0\main.group.fsx"
 
+// Assuming you have :
+// - python in your PATH
+// - FAKE in your PATH
+// You can do : "fake run" in the solution folder
+// It will run the exercice and generate traces
+
 type CargoId = int
 
 type Warehouse =
