@@ -10,3 +10,6 @@ NUGET
       FSharp.Core (>= 4.6.2)
     Mono.Cecil (0.11.1)
     Newtonsoft.Json (12.0.3)
+GITHUB
+  remote: Softwarepark/exercises
+    transport-tycoon/trace/trace.py (dccb48f87de958a2d7eba4be90590b52fde91bb0)

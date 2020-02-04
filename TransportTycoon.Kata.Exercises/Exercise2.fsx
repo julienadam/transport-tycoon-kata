@@ -70,13 +70,21 @@ module EventLogging =
         }
 
     open FSharp.Json
+    open System.IO
 
     let private config = JsonConfig.create (unformatted = true, serializeNone = SerializeNone.Omit)
 
     let serializeEvent evt = Json.serializeEx config evt
 
     let consoleWriteSink evt = serializeEvent evt |> System.Console.WriteLine
-
+    
+    let fileWriteSink fileName event =
+        File.AppendAllText(fileName, (event |> serializeEvent) + System.Environment.NewLine)
+    
+    let consoleAndFileSink fileName event = 
+        consoleWriteSink event
+        fileWriteSink fileName event
+    
     let inline private truckLocationToLocation (d: LandLocation) =
         match d with 
         | LandPickupLocation pl -> 
@@ -133,17 +141,6 @@ module EventLogging =
 
     let logShipArrivalEvent (time: int) (vehicleId: VehicleId) (location: SeaLocation) (cargo: Cargo option) =
         logArrivalEvent SHIP time vehicleId (location |> shipLocationToLocation) cargo
-
-
-type Transit<'a> when 'a : equality =
-    {
-        Origin : 'a
-        Destination : 'a
-        HoursLeftToDestination: int
-    }
-    with
-        member this.IsArrivingAt loc = this.HoursLeftToDestination = 1 && this.Destination = loc
-        member this.ProgressOneHour () = { this with HoursLeftToDestination = this.HoursLeftToDestination - 1 }
 
 open System
 
@@ -536,10 +533,18 @@ let deliveryTests =
 
 runTests defaultConfig deliveryTests
 
-deliver "AB" consoleWriteSink
+open System.IO
 
-// AABABBAB
-deliver "AABABBAB" consoleWriteSink
+let outputDir = Path.Combine(__SOURCE_DIRECTORY__, "output")
+if not (Directory.Exists(outputDir)) then
+    Directory.CreateDirectory(outputDir) |> ignore
 
-// ABBBABAAABBB
-deliver "ABBBABAAABBB" consoleWriteSink
+let deliverAndLog cargoListInput =
+    let filePath = (Path.Combine(outputDir, cargoListInput + ".log"))
+    File.Delete(filePath) |> ignore
+    let loggingSink evt = consoleAndFileSink filePath evt
+    deliver cargoListInput loggingSink
+
+deliverAndLog "AB"
+deliverAndLog "AABABBAB"
+deliverAndLog "ABBBABAAABBB"

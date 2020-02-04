@@ -5,3 +5,5 @@ framework: netcore3.0, netstandard2.0, netstandard2.1
 nuget expecto
 nuget FSharp.Json
 nuget NewtonSoft.Json
+
+github  Softwarepark/exercises transport-tycoon/trace/trace.py 
