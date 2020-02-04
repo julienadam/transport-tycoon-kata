@@ -397,82 +397,91 @@ and ShipState =
 | DeliveringShip of DeliveringShip
 | ReturningShip of ReturningShip
 
-type Ship = IdentifiableVehicle<ShipState>
+type Ship = 
+    {
+        Id : VehicleId
+        State : ShipState
+    }
+    with 
+        member
+            this.SailOneHour (cargoTracker: CargoTracker) (hoursElapsed: int) (sink: Event -> unit)=
+                let tracker, state = 
+                    match this.State with
+                    | DeliveringShip ship ->
+                        cargoTracker, ship.SailOn ()
+                    | ReturningShip ship ->
+                        cargoTracker, ship.SailOn ()
+                    | LadenDockedShip ship ->
+                        logShipArrivalEvent hoursElapsed this.Id (SeaDropOffLocation WarehouseA) (Some ship.Cargo) sink
+                        logShipDepartureEvent hoursElapsed this.Id (SeaDropOffLocation WarehouseA) (SeaPickupLocation PortQuay) None sink
+                        cargoTracker.Deliver ship.Cargo this.Id hoursElapsed, ship.UnloadAndCastOut()
+                    | UnladenDockedShip ship ->
+                        if ship.HoursWaited = 0 then
+                            logShipArrivalEvent hoursElapsed this.Id (SeaPickupLocation PortQuay) None sink
+                        match cargoTracker.TryPickupAtPort this.Id with
+                        | None, tracker ->
+                            tracker, ship.Wait()
+                        | Some cargo, tracker ->
+                            logShipDepartureEvent hoursElapsed this.Id (SeaPickupLocation PortQuay) (SeaDropOffLocation WarehouseA) (Some cargo) sink
+                            tracker, ship.LoadAndCastOut cargo
+                tracker, { this with State = state }
 
-let sailOneHour (cargoTracker: CargoTracker) (vehicle: Ship) (hoursElapsed: int) (sink: Event -> unit)=
-    match vehicle.State with
-    | DeliveringShip ship ->
-        cargoTracker, ship.SailOn ()
-    | ReturningShip ship ->
-        cargoTracker, ship.SailOn ()
-    | LadenDockedShip ship ->
-        logShipArrivalEvent hoursElapsed vehicle.Id (SeaDropOffLocation WarehouseA) (Some ship.Cargo) sink
-        logShipDepartureEvent hoursElapsed vehicle.Id (SeaDropOffLocation WarehouseA) (SeaPickupLocation PortQuay) None sink
-        cargoTracker.Deliver ship.Cargo vehicle.Id hoursElapsed, ship.UnloadAndCastOut()
-    | UnladenDockedShip ship ->
-        if ship.HoursWaited = 0 then
-            logShipArrivalEvent hoursElapsed vehicle.Id (SeaPickupLocation PortQuay) None sink
-        match cargoTracker.TryPickupAtPort vehicle.Id with
-        | None, tracker ->
-            tracker, ship.Wait()
-        | Some cargo, tracker ->
-            logShipDepartureEvent hoursElapsed vehicle.Id (SeaPickupLocation PortQuay) (SeaDropOffLocation WarehouseA) (Some cargo) sink
-            tracker, ship.LoadAndCastOut cargo
+let runShipTest initialState initialTracker expectedState trackerChecks =
+    let tracker, ship = { Id = 1; State = initialState }.SailOneHour initialTracker 1 consoleWriteSink
+    Expect.equal ship.State expectedState "Ship is not in the expected state"
+    trackerChecks tracker
+
+let runShipTestWithEmptyTracker initialState expectedState =
+    runShipTest initialState CargoTracker.Empty expectedState ignore
 
 let shipTests =
-   testList "Ship sailing tests" [
+    testList "Ship sailing tests" [
 
-       test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining should still be sailing, with 3 hours remaining" {
-           let initialTracker = CargoTracker.Empty
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 4 })} 1 consoleWriteSink
-           Expect.equal shipState (DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }) "Ship is not in the expected state"
-           Expect.equal tracker initialTracker ""
-       }
+        test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining should still be sailing, with 3 hours remaining" {
+           let initialState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 4 }
+           let expectedState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-       test "After one hour, a ship returning to port, with 4 hours remaining should still be sailing, with 3 hours remaining" {
-           let initialTracker = CargoTracker.Empty
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 4 })} 1 consoleWriteSink
-           Expect.equal shipState (ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }) "Ship is not in the expected state"
-           Expect.equal tracker initialTracker ""
-       }
+        test "After one hour, a ship returning to port, with 4 hours remaining should still be sailing, with 3 hours remaining" {
+           let initialState = ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 4 }
+           let expectedState = ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-       test "After one hour, a ship sailing to the warehouse with cargo, with 1 hours remaining should be docked at the destination" {
-           let initialTracker = CargoTracker.Empty
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 1 })} 1 consoleWriteSink
-           Expect.equal shipState (LadenDockedShip { Cargo = testCargoA; DockedAt = WarehouseA }) "Ship is not in the expected state"
-           Expect.equal tracker initialTracker ""
-       }
+        test "After one hour, a ship sailing to the warehouse with cargo, with 1 hours remaining should be docked at the destination" {
+           let initialState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 1 }
+           let expectedState = LadenDockedShip { Cargo = testCargoA; DockedAt = WarehouseA }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-       test "After one hour, a ship returning to port, with 1 hours remaining should be docked at the port" {
-           let initialTracker = CargoTracker.Empty
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 1 })} 1 consoleWriteSink
-           Expect.equal shipState (UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }) "Ship is not in the expected state"
-           Expect.equal tracker initialTracker ""
-       }
+        test "After one hour, a ship returning to port, with 1 hours remaining should be docked at the port" {
+           let initialState = ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 1 }
+           let expectedState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-       test "After one hour, a ship docked at the port with cargo available should be sailing to the warehouse with 3 hours remaining" {
+        test "After one hour, a ship docked at the port with cargo available should be sailing to the warehouse with 3 hours remaining" {
            let initialTracker = (CargoTracker.Empty.DropOffAtPort testCargoA).DropOffAtPort testCargoA'
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 })} 1 consoleWriteSink
-           Expect.equal shipState (DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }) "Ship is not in the expected state"
-           Expect.equal tracker.PortOutboundQueue [testCargoA'] "Port should only have A' left"
-           Expect.equal tracker.InTransit [testCargoA, 1] "Port should only have A' left"
-       }
+           let initialState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
+           let expectedState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }
+           runShipTest initialState initialTracker expectedState (fun tracker -> 
+                Expect.equal tracker.PortOutboundQueue [testCargoA'] "Port should only have A' left"
+                Expect.equal tracker.InTransit [testCargoA, 1] "Port should only have A' left")
+        }
 
-       test "After one hour, a ship docked at the port with no cargo available should be waiting at the port" {
-           let initialTracker = CargoTracker.Empty
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 })} 1 consoleWriteSink
-           Expect.equal shipState (UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 1 }) "Ship is not in the expected state"
-           Expect.equal tracker initialTracker ""
-       }
+        test "After one hour, a ship docked at the port with no cargo available should be waiting at the port" {
+           let initialState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
+           let expectedState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 1 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-       test "After one hour, a ship docked at the warehouse should be sailing empty to the port" {
-           let initialTracker = CargoTracker.Empty
-           let tracker, shipState = sailOneHour initialTracker { Id = 1; State = (LadenDockedShip { DockedAt = WarehouseA; Cargo = testCargoA })} 1 consoleWriteSink
-           Expect.equal shipState (ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }) "Ship is not in the expected state"
-           Expect.equal tracker.Delivered [testCargoA, 1, 1] "Cargo A should have been delivered at hour 1"
-       }
-
- ]
+        test "After one hour, a ship docked at the warehouse should be sailing empty to the port" {
+           let initialState = LadenDockedShip { DockedAt = WarehouseA; Cargo = testCargoA }
+           let expectedState = ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
+]
 
 runTests defaultConfig shipTests
 
@@ -483,8 +492,8 @@ type Vehicle =
 let moveOneHour (cargoTracker: CargoTracker) vehicle elapsed sink =
     match vehicle with
     | Ship ship ->
-        let cargoTrackerAfterOneHour, shipStateAfterOneHour = sailOneHour cargoTracker ship elapsed sink
-        cargoTrackerAfterOneHour, Ship { Id = ship.Id; State = shipStateAfterOneHour }
+        let c, s = ship.SailOneHour cargoTracker elapsed sink
+        c, Ship s
     | Truck truck -> 
         let c, t = truck.DriveOneHour cargoTracker elapsed sink
         c, Truck t
