@@ -388,6 +388,13 @@ type ShipHold (cargoList : Cargo list) =
         | _ -> ()
 
     member _.Cargo = cargoList
+    override _.GetHashCode() =
+        hash cargoList
+    override this.Equals(b) =
+        match b with
+        | :? ShipHold as h -> (h.Cargo = this.Cargo)
+        | _ -> false
+    
 
 type LadenDockedShip = {
     DockedAt : SeaDropOffLocation
@@ -498,56 +505,68 @@ let runShipTest initialState initialTracker expectedState trackerChecks =
 let runShipTestWithEmptyTracker initialState expectedState =
     runShipTest initialState CargoTracker.Empty expectedState ignore
 
-// let shipTests =
-//     testList "Ship sailing tests" [
+let shipTests =
+    testList "Ship sailing tests" [
 
-//         test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining should still be sailing, with 3 hours remaining" {
-//            let initialState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 4 }
-//            let expectedState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }
-//            runShipTestWithEmptyTracker initialState expectedState
-//         }
+        test "After one hour, a ship sailing to warehouse A with cargo, with 4 hours remaining should still be sailing, with 3 hours remaining" {
+           let initialState = DeliveringShip { Hold = ShipHold([testCargoA]); Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 4 }
+           let expectedState = DeliveringShip { Hold = ShipHold([testCargoA]); Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-//         test "After one hour, a ship returning to port, with 4 hours remaining should still be sailing, with 3 hours remaining" {
-//            let initialState = ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 4 }
-//            let expectedState = ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }
-//            runShipTestWithEmptyTracker initialState expectedState
-//         }
+        test "After one hour, a ship returning to port, with 4 hours remaining should still be sailing, with 3 hours remaining" {
+           let initialState = ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 4 }
+           let expectedState = ReturningShip { Origin =  WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-//         test "After one hour, a ship sailing to the warehouse with cargo, with 1 hours remaining should be docked at the destination" {
-//            let initialState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 1 }
-//            let expectedState = LadenDockedShip { Cargo = testCargoA; DockedAt = WarehouseA }
-//            runShipTestWithEmptyTracker initialState expectedState
-//         }
+        test "After one hour, a ship sailing to the warehouse with cargo, with 1 hours remaining should be docked at the destination" {
+           let initialState = DeliveringShip { Hold = ShipHold([testCargoA]); Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 1 }
+           let expectedState = LadenDockedShip { Hold = ShipHold([testCargoA]); DockedAt = WarehouseA }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-//         test "After one hour, a ship returning to port, with 1 hours remaining should be docked at the port" {
-//            let initialState = ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 1 }
-//            let expectedState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
-//            runShipTestWithEmptyTracker initialState expectedState
-//         }
+        test "After one hour, a ship returning to port, with 1 hours remaining should be docked at the port" {
+           let initialState = ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 1 }
+           let expectedState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-//         test "After one hour, a ship docked at the port with cargo available should be sailing to the warehouse with 3 hours remaining" {
-//            let initialTracker = (CargoTracker.Empty.DropOffAtPort testCargoA).DropOffAtPort testCargoA'
-//            let initialState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
-//            let expectedState = DeliveringShip { Cargo = testCargoA; Origin = PortQuay; Destination = WarehouseA; HoursLeftToDestination = 3 }
-//            runShipTest initialState initialTracker expectedState (fun tracker -> 
-//                 Expect.equal tracker.PortOutboundQueue [testCargoA'] "Port should only have A' left"
-//                 Expect.equal tracker.InTransit [testCargoA, 1] "Port should only have A' left")
-//         }
+        test "After one hour, a ship docked at the port with cargo available should be loading the cargo" {
+           let initialTracker = (CargoTracker.Empty.DropOffAtPort testCargoA).DropOffAtPort testCargoA'
+           let initialState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
+           let expectedState = LoadingShip { DockedAt = PortQuay; Hold = ShipHold([testCargoA; testCargoA']) }
+           runShipTest initialState initialTracker expectedState (fun tracker -> 
+                Expect.equal tracker.PortOutboundQueue [] "Port should only have A' left"
+                Expect.equal tracker.InTransit [(testCargoA, 1); (testCargoA', 1)] "Port should only have A' left")
+        }
 
-//         test "After one hour, a ship docked at the port with no cargo available should be waiting at the port" {
-//            let initialState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
-//            let expectedState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 1 }
-//            runShipTestWithEmptyTracker initialState expectedState
-//         }
+        test "After one hour, a ship loading at the port should be sailing to the warehouse with the cargo and 5 hours left" {
+           let initialState = LoadingShip { DockedAt = PortQuay; Hold = ShipHold([testCargoA; testCargoA']) }
+           let expectedState = DeliveringShip { Origin = PortQuay; Destination = WarehouseA; Hold = ShipHold([testCargoA; testCargoA']); HoursLeftToDestination = 5 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-//         test "After one hour, a ship docked at the warehouse should be sailing empty to the port" {
-//            let initialState = LadenDockedShip { DockedAt = WarehouseA; Cargo = testCargoA }
-//            let expectedState = ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 3 }
-//            runShipTestWithEmptyTracker initialState expectedState
-//         }
-// ]
+        test "After one hour, a ship docked at the port with no cargo available should be waiting at the port" {
+           let initialState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 0 }
+           let expectedState = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 1 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
 
-// runTests defaultConfig shipTests
+        test "After one hour, a ship docked at the warehouse should be unloading" {
+           let initialState = LadenDockedShip { DockedAt = WarehouseA; Hold = ShipHold([testCargoA]) }
+           let expectedState = UnloadingShip { DockedAt = WarehouseA; Hold = ShipHold([testCargoA]) }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
+
+        test "After one hour, an unloading ship docked at the warehouse should be returning with 5 hours left" {
+           let initialState = UnloadingShip { DockedAt = WarehouseA; Hold = ShipHold([testCargoA]) }
+           let expectedState = ReturningShip { Origin = WarehouseA; Destination = PortQuay; HoursLeftToDestination = 5 }
+           runShipTestWithEmptyTracker initialState expectedState
+        }
+]
+
+runTests defaultConfig shipTests
 
 type Vehicle =
     | Truck of Truck
