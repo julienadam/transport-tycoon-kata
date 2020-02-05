@@ -32,6 +32,16 @@ Target.create "Exercice2" (fun _ ->
     }) script [] |> ignore
 )
 
+Target.create "Exercice2Tests" (fun _ ->
+  let script = System.IO.Path.Combine("TransportTycoon.Kata.Exercises","Exercise2.Tests.fsx")
+  Fsi.exec (fun p -> 
+    { p with 
+        TargetProfile = Fsi.Profile.Netcore
+        ToolPath = Fsi.FsiTool.Internal
+        WorkingDirectory = "TransportTycoon.Kata.Exercises"
+    }) script [] |> ignore
+)
+
 let tracePythonScript = @"paket-files\Softwarepark\exercises\transport-tycoon\trace\trace.py"
 let pythonExe = "python.exe"
 
@@ -60,7 +70,8 @@ open Fake.Core.TargetOperators
 "Clean"
   ==> "PaketRestore"
     ==> "Exercice2"
-      ==>"Exercice2Traces"
+      ==> "Exercice2Tests"
+        ==>"Exercice2Traces"
 
 // start build
 Target.runOrDefault "Exercice2Traces"
