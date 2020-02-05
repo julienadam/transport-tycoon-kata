@@ -356,5 +356,3 @@ MigrationBackup/
 #
 .paket/
 paket-files/
-
-**/output/

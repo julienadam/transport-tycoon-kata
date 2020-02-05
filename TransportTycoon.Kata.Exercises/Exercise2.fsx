@@ -582,7 +582,7 @@ let moveOneHour (cargoTracker: CargoTracker) vehicle elapsed sink =
         c, Truck t
 
 let initialState = [
-    Truck { Id = 0; State = UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 1 } } // TODO: specific initial state instead of 1 to avoid arrival event
+    Truck { Id = 0; State = UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 1 } }
     Truck { Id = 1; State = UnladenParkedTruck { ParkedAt = Factory; HoursWaited = 1 } }
     Ship { Id = 2; State = UnladenDockedShip { DockedAt = PortQuay; HoursWaited = 1 } }
 ]
